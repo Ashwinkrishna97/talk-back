@@ -1,16 +1,24 @@
 .rba-anchor-btn {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  z-index: 50;
+  top: 6px;
+  right: 6px;
+  z-index: 9999;
   background: #00a884;
   color: #fff;
   border: none;
   border-radius: 4px;
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 6px;
   cursor: pointer;
-  opacity: 0.85;
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+.rba-anchor-host:hover .rba-anchor-btn,
+.rba-anchor-btn.rba-set {
+  opacity: 0.95;
+  pointer-events: auto;
 }
 .rba-anchor-btn:hover { opacity: 1; }
 .rba-anchor-btn.rba-set { background: #d84315; }
