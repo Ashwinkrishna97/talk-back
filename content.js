@@ -45,6 +45,7 @@ const SUMMARY_TRIGGER_THRESHOLD = 20;
 const SUMMARY_REFRESH_CHUNK = 10;
 const TRACKING_POLL_MS = 1500;
 const PRIOR_CONTEXT_SIZE = 5;
+const NO_DEBATE_REPLY = 'TALK_BACK_NO_DEBATE_REPLY';
 
 const state = {
   anchorRow: null,
@@ -55,6 +56,7 @@ const state = {
   seenIds: new Set(),
   summary: '',
   summarizedCount: 0,
+  lastDraftedOpponentCount: 0,
   requestInFlight: false,
   requestId: 0,
   lastInsertedDraft: ''
@@ -116,6 +118,10 @@ function isInAnchoredChat() {
   return !state.chatKey || !currentChatKey || currentChatKey === state.chatKey;
 }
 
+function getOpponentNewCount() {
+  return state.sinceAnchor.filter((m) => m.sender !== 'me').length;
+}
+
 function injectAnchorButtons() {
   getAllRows().forEach((row) => {
     if (row.querySelector('.rba-anchor-btn')) return;
@@ -149,12 +155,29 @@ function resetDebateContext() {
   state.seenIds = new Set([state.anchorData.id]);
   state.summary = '';
   state.summarizedCount = 0;
+  state.lastDraftedOpponentCount = 0;
+}
+
+function clearAnchor() {
+  state.anchorRow = null;
+  state.anchorData = null;
+  state.chatKey = '';
+  state.priorContext = [];
+  state.sinceAnchor = [];
+  state.seenIds = new Set();
+  state.summary = '';
+  state.summarizedCount = 0;
+  state.lastDraftedOpponentCount = 0;
+  state.requestInFlight = false;
+  state.requestId += 1;
+  refreshAnchorButtons();
+  updateFab();
 }
 
 function refreshAnchorButtons() {
   document.querySelectorAll('.rba-anchor-btn').forEach((btn) => {
     btn.classList.remove('rba-set');
-    btn.textContent = 'set anchor';
+    btn.textContent = 'anchor';
   });
   const btn = state.anchorRow?.querySelector('.rba-anchor-btn');
   if (btn) {
@@ -214,6 +237,14 @@ function trackNewMessages() {
 
 function createFab() {
   if (document.querySelector('.rba-fab')) return;
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'rba-stop-btn';
+  stopBtn.textContent = '⏻';
+  stopBtn.title = 'Stop Talk Back for this chat';
+  stopBtn.setAttribute('aria-label', 'Stop Talk Back for this chat');
+  stopBtn.addEventListener('click', clearAnchor);
+  document.body.appendChild(stopBtn);
+
   const fab = document.createElement('button');
   fab.className = 'rba-fab';
   fab.textContent = 'set an anchor first';
@@ -224,17 +255,25 @@ function createFab() {
 
 function updateFab() {
   const fab = document.querySelector('.rba-fab');
+  const stopBtn = document.querySelector('.rba-stop-btn');
   if (!fab || state.requestInFlight) return;
 
   const inAnchoredChat = !state.anchorData || isInAnchoredChat();
-  fab.disabled = !state.anchorData || !inAnchoredChat;
+  const opponentNewCount = getOpponentNewCount();
+  const undraftedOpponentCount = Math.max(0, opponentNewCount - state.lastDraftedOpponentCount);
+  const canDraft = !!state.anchorData && inAnchoredChat && undraftedOpponentCount > 0;
+
+  fab.disabled = !canDraft;
+  if (stopBtn) stopBtn.classList.toggle('rba-visible', !!state.anchorData);
 
   if (!state.anchorData) {
     fab.textContent = 'set an anchor first';
   } else if (!inAnchoredChat) {
     fab.textContent = 'return to anchored chat';
+  } else if (undraftedOpponentCount === 0) {
+    fab.textContent = 'waiting for reply';
   } else {
-    const countLabel = state.sinceAnchor.length ? ` (${state.sinceAnchor.length} new)` : '';
+    const countLabel = ` (${undraftedOpponentCount} new)`;
     fab.textContent = `draft rebuttal${countLabel}`;
   }
 }
@@ -280,6 +319,11 @@ async function generateAndInsertDraft() {
     updateFab();
     return;
   }
+  if (getOpponentNewCount() <= state.lastDraftedOpponentCount) {
+    alert('Waiting for the other person to reply before drafting a rebuttal.');
+    updateFab();
+    return;
+  }
 
   state.requestInFlight = true;
   const requestId = ++state.requestId;
@@ -312,6 +356,12 @@ async function generateAndInsertDraft() {
   if (!response) return;
   if (response.error) {
     alert(`Rebuttal assistant: ${response.error}`);
+    return;
+  }
+  if (response.draft === NO_DEBATE_REPLY) {
+    state.lastDraftedOpponentCount = getOpponentNewCount();
+    updateFab();
+    alert('Latest message looks off-topic for the debate, so Talk Back did not draft a reply.');
     return;
   }
 
@@ -351,6 +401,8 @@ function insertDraft(text) {
   document.execCommand('selectAll', false, null);
   document.execCommand('insertText', false, text);
   state.lastInsertedDraft = text;
+  state.lastDraftedOpponentCount = getOpponentNewCount();
+  updateFab();
 }
 
 const observer = new MutationObserver(() => {
