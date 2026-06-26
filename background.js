@@ -38,17 +38,22 @@ const SUMMARY_SYSTEM_PROMPT = [
   'Output only the updated summary text, nothing else — no preamble, no labels.'
 ].join(' ');
 
+function cleanMessage(message) {
+  if (!message) return message;
+  return message.trim().replace(/\.+$/, '');
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GENERATE_REBUTTAL') {
     generateRebuttal(msg.payload)
       .then((draft) => sendResponse({ draft }))
-      .catch((err) => sendResponse({ error: err.message }));
+      .catch((err) => sendResponse({ error: cleanMessage(err.message) }));
     return true;
   }
   if (msg.type === 'SUMMARIZE_MIDDLE') {
     summarizeMiddle(msg.payload)
       .then((summary) => sendResponse({ summary }))
-      .catch((err) => sendResponse({ error: err.message }));
+      .catch((err) => sendResponse({ error: cleanMessage(err.message) }));
     return true;
   }
 });
@@ -56,7 +61,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function callClaude({ model, system, userContent, tools, maxTokens }) {
   const { anthropicApiKey } = await chrome.storage.local.get('anthropicApiKey');
   if (!anthropicApiKey) {
-    throw new Error('No Claude API key set. Click the extension icon and add one.');
+    throw new Error('No Claude API key set. Click the extension icon and add one');
   }
 
   const body = {

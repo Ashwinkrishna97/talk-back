@@ -23,11 +23,17 @@
 .rba-anchor-btn:hover { opacity: 1; }
 .rba-anchor-btn.rba-set { background: #d84315; }
 
-.rba-fab {
+.rba-controls {
   position: fixed;
   bottom: 90px;
-  right: 24px;
+  right: 16px;
   z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rba-fab {
   background: #00a884;
   color: #fff;
   border: none;
@@ -42,22 +48,16 @@
 .rba-fab.rba-loading { opacity: 0.7; }
 
 .rba-stop-btn {
-  position: fixed;
-  bottom: 142px;
-  right: 24px;
-  z-index: 9999;
-  width: 34px;
-  height: 34px;
   display: none;
-  align-items: center;
-  justify-content: center;
-  background: #2a3942;
+  background: #d84315;
   color: #fff;
   border: none;
-  border-radius: 50%;
-  font-size: 17px;
+  border-radius: 24px;
+  padding: 10px 18px;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
 .rba-stop-btn.rba-visible { display: flex; }
-.rba-stop-btn:hover { background: #d84315; }
+.rba-stop-btn:hover { background: #c23a10; }

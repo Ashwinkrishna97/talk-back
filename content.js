@@ -36,6 +36,7 @@ const SEL = {
   copyableText: '.copyable-text',
   outgoingStatusIcon: OUTGOING_STATUS_SELECTOR,
   composeBox: COMPOSE_BOX_SELECTOR,
+  composeFooter: '#main footer',
   chatScrollPanel: CHAT_SCROLL_PANEL_SELECTOR,
   chatTitle: CHAT_TITLE_SELECTOR
 };
@@ -46,6 +47,7 @@ const SUMMARY_REFRESH_CHUNK = 10;
 const TRACKING_POLL_MS = 1500;
 const PRIOR_CONTEXT_SIZE = 5;
 const NO_DEBATE_REPLY = 'TALK_BACK_NO_DEBATE_REPLY';
+const CONTROLS_MARGIN = 16;
 
 const state = {
   anchorRow: null,
@@ -130,11 +132,14 @@ function injectAnchorButtons() {
     host.style.position = host.style.position || 'relative';
     const btn = document.createElement('button');
     btn.className = 'rba-anchor-btn';
-    btn.textContent = 'Anchor';
-    btn.title = 'Set anchor';
+    btn.textContent = 'Set anchor';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      setAnchor(row);
+      if (state.anchorRow === row) {
+        clearAnchor();
+      } else {
+        setAnchor(row);
+      }
     });
     host.appendChild(btn);
   });
@@ -177,12 +182,12 @@ function clearAnchor() {
 function refreshAnchorButtons() {
   document.querySelectorAll('.rba-anchor-btn').forEach((btn) => {
     btn.classList.remove('rba-set');
-    btn.textContent = 'Anchor';
+    btn.textContent = 'Set anchor';
   });
   const btn = state.anchorRow?.querySelector('.rba-anchor-btn');
   if (btn) {
     btn.classList.add('rba-set');
-    btn.textContent = 'Anchor ✓';
+    btn.textContent = 'Remove anchor';
   }
 }
 
@@ -237,20 +242,33 @@ function trackNewMessages() {
 
 function createFab() {
   if (document.querySelector('.rba-fab')) return;
+
+  const controls = document.createElement('div');
+  controls.className = 'rba-controls';
+
   const stopBtn = document.createElement('button');
   stopBtn.className = 'rba-stop-btn';
-  stopBtn.textContent = '⏻';
-  stopBtn.title = 'Stop the assistant';
-  stopBtn.setAttribute('aria-label', 'Stop the assistant');
+  stopBtn.textContent = 'Remove anchor';
   stopBtn.addEventListener('click', clearAnchor);
-  document.body.appendChild(stopBtn);
+  controls.appendChild(stopBtn);
 
   const fab = document.createElement('button');
   fab.className = 'rba-fab';
   fab.textContent = 'Set an anchor first';
   fab.disabled = true;
   fab.addEventListener('click', generateAndInsertDraft);
-  document.body.appendChild(fab);
+  controls.appendChild(fab);
+
+  document.body.appendChild(controls);
+  positionControls();
+}
+
+function positionControls() {
+  const controls = document.querySelector('.rba-controls');
+  if (!controls) return;
+  const footer = document.querySelector(SEL.composeFooter);
+  const footerHeight = footer ? footer.getBoundingClientRect().height : 0;
+  controls.style.bottom = `${footerHeight + CONTROLS_MARGIN}px`;
 }
 
 function updateFab() {
@@ -264,7 +282,7 @@ function updateFab() {
   const canDraft = !!state.anchorData && inAnchoredChat && undraftedOpponentCount > 0;
 
   fab.disabled = !canDraft;
-  if (stopBtn) stopBtn.classList.toggle('rba-visible', !!state.anchorData);
+  if (stopBtn) stopBtn.classList.toggle('rba-visible', !!state.anchorData && inAnchoredChat);
 
   if (!state.anchorData) {
     fab.textContent = 'Set an anchor first';
@@ -273,8 +291,7 @@ function updateFab() {
   } else if (undraftedOpponentCount === 0) {
     fab.textContent = 'Waiting for a reply';
   } else {
-    const countLabel = ` (${undraftedOpponentCount} new)`;
-    fab.textContent = `draft rebuttal${countLabel}`;
+    fab.textContent = `Draft rebuttal — ${undraftedOpponentCount} new`;
   }
 }
 
@@ -332,7 +349,7 @@ async function generateAndInsertDraft() {
   const fab = document.querySelector('.rba-fab');
   fab.disabled = true;
   fab.classList.add('rba-loading');
-  fab.textContent = 'thinking…';
+  fab.textContent = 'Thinking...';
 
   await maybeRefreshSummary();
 
@@ -368,8 +385,7 @@ async function generateAndInsertDraft() {
   const newCount = state.sinceAnchor.length - sinceCountAtRequest;
   if (newCount > 0) {
     const proceed = confirm(
-      `${newCount} new message${newCount > 1 ? 's' : ''} arrived while drafting this. ` +
-      'Shall I insert what's already drafted or would you like to hit cancel for me to redraft a new reply?'
+      `${newCount} new message${newCount > 1 ? 's' : ''} arrived while drafting a reply. Shall I insert what's already drafted, or cancel so I can redraft a new reply?`
     );
     if (!proceed) return;
   }
@@ -386,7 +402,7 @@ function insertDraft(text) {
 
   const current = box.innerText.trim();
   if (current && current !== state.lastInsertedDraft) {
-    if (!confirm('I can see that you've typed something already — shall I overwrite it with I've drafted?')) {
+    if (!confirm(`I can see that you've typed something already — shall I overwrite it with what I've drafted?`)) {
       return;
     }
   }
@@ -408,6 +424,7 @@ function insertDraft(text) {
 const observer = new MutationObserver(() => {
   injectAnchorButtons();
   trackNewMessages();
+  positionControls();
 });
 
 function start() {
@@ -420,6 +437,7 @@ function start() {
   setInterval(() => {
     injectAnchorButtons();
     trackNewMessages();
+    positionControls();
   }, TRACKING_POLL_MS);
 }
 

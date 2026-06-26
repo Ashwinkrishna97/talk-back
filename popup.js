@@ -1,14 +1,30 @@
 const keyInput = document.getElementById('key');
-const status = document.getElementById('status');
+const saveBtn = document.getElementById('save');
+
+function setMode(mode) {
+  saveBtn.dataset.mode = mode;
+  saveBtn.textContent = mode === 'clear' ? 'Clear' : 'Save';
+}
 
 chrome.storage.local.get('anthropicApiKey', (data) => {
-  if (data.anthropicApiKey) keyInput.value = data.anthropicApiKey;
+  if (data.anthropicApiKey) {
+    keyInput.value = data.anthropicApiKey;
+    setMode('clear');
+  } else {
+    setMode('save');
+  }
 });
 
-document.getElementById('save').addEventListener('click', () => {
-  const key = keyInput.value.trim();
-  chrome.storage.local.set({ anthropicApiKey: key }, () => {
-    status.textContent = key ? 'Saved.' : 'Key cleared.';
-    setTimeout(() => (status.textContent = ''), 1500);
-  });
+saveBtn.addEventListener('click', () => {
+  if (saveBtn.dataset.mode === 'clear') {
+    chrome.storage.local.remove('anthropicApiKey', () => {
+      keyInput.value = '';
+      saveBtn.textContent = 'Key cleared';
+    });
+  } else {
+    const key = keyInput.value.trim();
+    chrome.storage.local.set({ anthropicApiKey: key }, () => {
+      saveBtn.textContent = 'Saved';
+    });
+  }
 });
