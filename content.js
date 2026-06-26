@@ -1,25 +1,62 @@
+const MESSAGE_TEXT_SELECTOR = [
+  'span[data-testid="selectable-text"]',
+  'span.selectable-text',
+  'div.copyable-text span[dir="ltr"]',
+  'div.copyable-text span[dir="auto"]'
+].join(', ');
+
+const OUTGOING_STATUS_SELECTOR = [
+  '[data-testid="msg-meta"] svg',
+  '[data-icon="msg-check"]',
+  '[data-icon="msg-dblcheck"]',
+  '[data-icon="msg-dblcheck-ack"]'
+].join(', ');
+
+const COMPOSE_BOX_SELECTOR = [
+  '[data-testid="conversation-compose-box-input"]',
+  '#main footer div[contenteditable="true"][role="textbox"]',
+  '#main footer div[contenteditable="true"]'
+].join(', ');
+
+const CHAT_SCROLL_PANEL_SELECTOR = [
+  '#main div[tabindex="-1"]',
+  '#main .copyable-area',
+  '#main [role="application"]'
+].join(', ');
+
+const CHAT_TITLE_SELECTOR = [
+  '#main header span[title]',
+  '#main header [data-testid="conversation-info-header-chat-title"]'
+].join(', ');
+
 const SEL = {
   messageRow: 'div[role="row"]',
   messageIdAttr: '[data-id]',
-  messageText: 'span[data-testid="selectable-text"]',
+  messageText: MESSAGE_TEXT_SELECTOR,
   copyableText: '.copyable-text',
-  outgoingStatusIcon: '[data-testid="msg-meta"] svg',
-  composeBox: '[data-testid="conversation-compose-box-input"]',
-  chatScrollPanel: '#main div[tabindex="-1"], #main .copyable-area'
+  outgoingStatusIcon: OUTGOING_STATUS_SELECTOR,
+  composeBox: COMPOSE_BOX_SELECTOR,
+  chatScrollPanel: CHAT_SCROLL_PANEL_SELECTOR,
+  chatTitle: CHAT_TITLE_SELECTOR
 };
 
 const RECENT_WINDOW_SIZE = 8;
 const SUMMARY_TRIGGER_THRESHOLD = 20;
 const SUMMARY_REFRESH_CHUNK = 10;
+const TRACKING_POLL_MS = 1500;
+const PRIOR_CONTEXT_SIZE = 5;
+const NO_DEBATE_REPLY = 'TALK_BACK_NO_DEBATE_REPLY';
 
 const state = {
   anchorRow: null,
   anchorData: null,
+  chatKey: '',
   priorContext: [],
   sinceAnchor: [],
   seenIds: new Set(),
   summary: '',
   summarizedCount: 0,
+  lastDraftedOpponentCount: 0,
   requestInFlight: false,
   requestId: 0,
   lastInsertedDraft: ''
@@ -47,14 +84,17 @@ function parseMeta(raw) {
 }
 
 function extractMessage(row) {
-  const textEl = row.querySelector(SEL.messageText);
-  const text = textEl ? textEl.innerText.trim() : '';
+  const textParts = Array.from(row.querySelectorAll(SEL.messageText))
+    .map((el) => normalizeText(el.innerText))
+    .filter(Boolean);
+  const text = textParts.length ? textParts[textParts.length - 1] : '';
+  const quotedText = textParts.length > 1 ? textParts.slice(0, -1).join(' / ') : '';
   const meta = row.querySelector(SEL.copyableText);
   const raw = meta?.getAttribute('data-pre-plain-text') || '';
   const { sender: senderName, timestampMs } = parseMeta(raw);
   const isOutgoing = !!row.querySelector(SEL.outgoingStatusIcon);
   const sender = isOutgoing ? 'me' : (senderName || 'them');
-  return { id: getRowId(row), text, sender, timestampMs };
+  return { id: getRowId(row), text, quotedText, sender, timestampMs };
 }
 
 function getAllRows() {
@@ -63,29 +103,73 @@ function getAllRows() {
   );
 }
 
+function normalizeText(text) {
+  return (text || '').replace(/\s+/g, ' ').trim();
+}
+
+function getCurrentChatKey() {
+  const titled = document.querySelector(SEL.chatTitle);
+  if (titled) return normalizeText(titled.getAttribute('title') || titled.textContent);
+  return normalizeText(document.querySelector('#main header')?.innerText || '');
+}
+
+function isInAnchoredChat() {
+  const currentChatKey = getCurrentChatKey();
+  return !state.chatKey || !currentChatKey || currentChatKey === state.chatKey;
+}
+
+function getOpponentNewCount() {
+  return state.sinceAnchor.filter((m) => m.sender !== 'me').length;
+}
+
 function injectAnchorButtons() {
   getAllRows().forEach((row) => {
     if (row.querySelector('.rba-anchor-btn')) return;
-    row.style.position = row.style.position || 'relative';
+    const host = row.querySelector(SEL.copyableText) || row;
+    host.classList.add('rba-anchor-host');
+    host.style.position = host.style.position || 'relative';
     const btn = document.createElement('button');
     btn.className = 'rba-anchor-btn';
-    btn.textContent = 'set anchor';
+    btn.textContent = 'Anchor';
+    btn.title = 'Set anchor';
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       setAnchor(row);
     });
-    row.appendChild(btn);
+    host.appendChild(btn);
   });
 }
 
 async function setAnchor(row) {
   state.anchorRow = row;
   state.anchorData = extractMessage(row);
+  state.chatKey = getCurrentChatKey();
+  resetDebateContext();
+  state.priorContext = await collectPriorContext(row, PRIOR_CONTEXT_SIZE);
+  refreshAnchorButtons();
+  updateFab();
+}
+
+function resetDebateContext() {
   state.sinceAnchor = [];
   state.seenIds = new Set([state.anchorData.id]);
   state.summary = '';
   state.summarizedCount = 0;
-  state.priorContext = await collectPriorContext(row, 5);
+  state.lastDraftedOpponentCount = 0;
+}
+
+function clearAnchor() {
+  state.anchorRow = null;
+  state.anchorData = null;
+  state.chatKey = '';
+  state.priorContext = [];
+  state.sinceAnchor = [];
+  state.seenIds = new Set();
+  state.summary = '';
+  state.summarizedCount = 0;
+  state.lastDraftedOpponentCount = 0;
+  state.requestInFlight = false;
+  state.requestId += 1;
   refreshAnchorButtons();
   updateFab();
 }
@@ -93,12 +177,12 @@ async function setAnchor(row) {
 function refreshAnchorButtons() {
   document.querySelectorAll('.rba-anchor-btn').forEach((btn) => {
     btn.classList.remove('rba-set');
-    btn.textContent = 'set anchor';
+    btn.textContent = 'Anchor';
   });
   const btn = state.anchorRow?.querySelector('.rba-anchor-btn');
   if (btn) {
     btn.classList.add('rba-set');
-    btn.textContent = 'anchor ✓';
+    btn.textContent = 'Anchor ✓';
   }
 }
 
@@ -120,6 +204,10 @@ function wait(ms) {
 
 function trackNewMessages() {
   if (!state.anchorData) return;
+  if (!isInAnchoredChat()) {
+    updateFab();
+    return;
+  }
   const rows = getAllRows();
   const anchorIdx = rows.findIndex((r) => getRowId(r) === state.anchorData.id);
 
@@ -135,8 +223,9 @@ function trackNewMessages() {
       state.anchorData.timestampMs != null &&
       data.timestampMs >= state.anchorData.timestampMs;
     const isAfterByPosition = anchorIdx !== -1 && idx > anchorIdx;
+    const isVisibleAfterAnchor = anchorIdx === -1;
 
-    if (isAfterByTime || (data.timestampMs == null && isAfterByPosition)) {
+    if (isAfterByTime || isAfterByPosition || isVisibleAfterAnchor) {
       state.seenIds.add(id);
       state.sinceAnchor.push(data);
     }
@@ -148,9 +237,17 @@ function trackNewMessages() {
 
 function createFab() {
   if (document.querySelector('.rba-fab')) return;
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 'rba-stop-btn';
+  stopBtn.textContent = '⏻';
+  stopBtn.title = 'Stop the assistant';
+  stopBtn.setAttribute('aria-label', 'Stop the assistant');
+  stopBtn.addEventListener('click', clearAnchor);
+  document.body.appendChild(stopBtn);
+
   const fab = document.createElement('button');
   fab.className = 'rba-fab';
-  fab.textContent = 'set an anchor first';
+  fab.textContent = 'Set an anchor first';
   fab.disabled = true;
   fab.addEventListener('click', generateAndInsertDraft);
   document.body.appendChild(fab);
@@ -158,11 +255,27 @@ function createFab() {
 
 function updateFab() {
   const fab = document.querySelector('.rba-fab');
+  const stopBtn = document.querySelector('.rba-stop-btn');
   if (!fab || state.requestInFlight) return;
-  fab.disabled = !state.anchorData;
-  fab.textContent = state.anchorData
-    ? `draft rebuttal${state.sinceAnchor.length ? ` (${state.sinceAnchor.length} new)` : ''}`
-    : 'set an anchor first';
+
+  const inAnchoredChat = !state.anchorData || isInAnchoredChat();
+  const opponentNewCount = getOpponentNewCount();
+  const undraftedOpponentCount = Math.max(0, opponentNewCount - state.lastDraftedOpponentCount);
+  const canDraft = !!state.anchorData && inAnchoredChat && undraftedOpponentCount > 0;
+
+  fab.disabled = !canDraft;
+  if (stopBtn) stopBtn.classList.toggle('rba-visible', !!state.anchorData);
+
+  if (!state.anchorData) {
+    fab.textContent = 'Set an anchor first';
+  } else if (!inAnchoredChat) {
+    fab.textContent = 'Return to the anchored chat';
+  } else if (undraftedOpponentCount === 0) {
+    fab.textContent = 'Waiting for a reply';
+  } else {
+    const countLabel = ` (${undraftedOpponentCount} new)`;
+    fab.textContent = `draft rebuttal${countLabel}`;
+  }
 }
 
 function getMiddleBoundary() {
@@ -195,12 +308,22 @@ async function maybeRefreshSummary() {
     state.summary = response.summary;
     state.summarizedCount = middleEnd;
   } else if (response?.error) {
-    console.warn('Rebuttal assistant: summary refresh failed, continuing without it.', response.error);
+    console.warn('Summary refresh failed — continuing without it', response.error);
   }
 }
 
 async function generateAndInsertDraft() {
   if (!state.anchorData || state.requestInFlight) return;
+  if (!isInAnchoredChat()) {
+    alert('Return to the anchored chat');
+    updateFab();
+    return;
+  }
+  if (getOpponentNewCount() <= state.lastDraftedOpponentCount) {
+    alert('Waiting for the other person to reply');
+    updateFab();
+    return;
+  }
 
   state.requestInFlight = true;
   const requestId = ++state.requestId;
@@ -232,7 +355,13 @@ async function generateAndInsertDraft() {
   if (requestId !== state.requestId) return;
   if (!response) return;
   if (response.error) {
-    alert(`Rebuttal assistant: ${response.error}`);
+    alert(`Talk Back: ${response.error}`);
+    return;
+  }
+  if (response.draft === NO_DEBATE_REPLY) {
+    state.lastDraftedOpponentCount = getOpponentNewCount();
+    updateFab();
+    alert('Latest message looks like non-debatable topic — no reply was drafted');
     return;
   }
 
@@ -240,7 +369,7 @@ async function generateAndInsertDraft() {
   if (newCount > 0) {
     const proceed = confirm(
       `${newCount} new message${newCount > 1 ? 's' : ''} arrived while drafting this. ` +
-      'Insert the draft anyway, or Cancel to discard it and redraft with the latest messages?'
+      'Shall I insert what's already drafted or would you like to hit cancel for me to redraft a new reply?'
     );
     if (!proceed) return;
   }
@@ -251,30 +380,29 @@ async function generateAndInsertDraft() {
 function insertDraft(text) {
   const box = document.querySelector(SEL.composeBox);
   if (!box) {
-    alert('Could not find the WhatsApp compose box — open a chat first.');
+    alert('Could not find the compose box — open a chat first');
     return;
   }
 
   const current = box.innerText.trim();
   if (current && current !== state.lastInsertedDraft) {
-    if (!confirm('The compose box already has text you typed — overwrite it with the drafted rebuttal?')) {
+    if (!confirm('I can see that you've typed something already — shall I overwrite it with I've drafted?')) {
       return;
     }
   }
 
-  const stillThere = state.anchorData && document.querySelector(`[data-id="${state.anchorData.id}"]`);
-  if (!stillThere) {
-    const proceed = confirm(
-      "Can't confirm this is still the same conversation as when you set the anchor " +
-      '(you may have switched chats, or just scrolled far away). Insert anyway?'
-    );
-    if (!proceed) return;
+  if (!isInAnchoredChat()) {
+    alert('Return to the anchored chat');
+    updateFab();
+    return;
   }
 
   box.focus();
   document.execCommand('selectAll', false, null);
   document.execCommand('insertText', false, text);
   state.lastInsertedDraft = text;
+  state.lastDraftedOpponentCount = getOpponentNewCount();
+  updateFab();
 }
 
 const observer = new MutationObserver(() => {
@@ -289,6 +417,10 @@ function start() {
   });
   injectAnchorButtons();
   createFab();
+  setInterval(() => {
+    injectAnchorButtons();
+    trackNewMessages();
+  }, TRACKING_POLL_MS);
 }
 
 const bootInterval = setInterval(() => {
