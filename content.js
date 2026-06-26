@@ -146,6 +146,11 @@ function injectAnchorButtons() {
 }
 
 async function setAnchor(row) {
+  const hasProgress = state.anchorData && (state.sinceAnchor.length > 0 || !!state.summary);
+  if (hasProgress && !confirm(`Setting a new anchor clears the assistant's memory — there's no way to undo this action`)) {
+    return;
+  }
+
   state.anchorRow = row;
   state.anchorData = extractMessage(row);
   state.chatKey = getCurrentChatKey();
@@ -164,6 +169,10 @@ function resetDebateContext() {
 }
 
 function clearAnchor() {
+  const hasProgress = state.sinceAnchor.length > 0 || !!state.summary;
+  if (hasProgress && !confirm(`Removing the anchor clears the assistant's memory — there's no way to undo this action`)) {
+    return;
+  }
   state.anchorRow = null;
   state.anchorData = null;
   state.chatKey = '';
